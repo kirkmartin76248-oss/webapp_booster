@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP32 Booster Clone Provisioning</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: -apple-system, sans-serif; max-width: 400px; margin: 20px auto; padding: 20px; border: 1px solid #ccc; border-radius: 12px; background: #f9f9f9; }
+        input, select, button { width: 100%; padding: 12px; margin: 8px 0; box-sizing: border-box; border-radius: 8px; border: 1px solid #ccc; font-size: 16px; }
+        button { background: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; }
+        .hint { font-size: 0.85em; color: #666; margin-bottom: 12px; line-height: 1.4; }
+    </style>
+</head>
+<body>
+    <h2>ESP32 Network Cloner</h2>
+    <p class="hint">This tool will configure your ESP32 to clone your existing Wi-Fi network seamlessly. Your stationary devices will connect automatically without changing their settings.</p>
+    
+    <button id="connectBtn">1. Connect to ESP32 via BLE</button>
+    
+    <div id="configForm" style="display:none;">
+        <h3>Wi-Fi Credentials</h3>
+        
+        <label for="historySelect">Quick Select Stored Network:</label>
+        <select id="historySelect">
+            <option value="">-- Choose Saved Network or Type Below --</option>
+        </select>
+
+        <input type="text" id="rSsid" placeholder="Type Target Wi-Fi Name (SSID)">
+        <input type="password" id="rPass" placeholder="Type Wi-Fi Password">
+
+        <button id="sendBtn">2. Clone Network & Start Booster</button>
+    </div>
+
+    <script>
+        const SERVICE_UUID = "4fa15560-c33e-11ed-afa1-0242ac120002";
+        const ROUTER_CHAR  = "4fa15a42-c33e-11ed-afa1-0242ac120002";
+        const BOOSTER_CHAR = "4fa15c72-c33e-11ed-afa1-0242ac120002";
+        
+        let gattServer, service;
+
+        // Load previously entered networks from iPhone's browser memory
+        function loadNetworkHistory() {
+            const historySelect = document.getElementById('historySelect');
+            const saved = JSON.parse(localStorage.getItem('wifi_history') || '[]');
+            
+            historySelect.innerHTML = '<option value="">-- Choose Saved Network or Type Below --</option>';
+            saved.forEach(ssid => {
+                let opt = document.createElement('option');
+                opt.value = ssid;
+                opt.innerHTML = ssid;
+                historySelect.appendChild(opt);
+            });
+        }
+
+        // Handle dropdown selection
+        document.getElementById('historySelect').addEventListener('change', (e) => {
+            if(e.target.value) {
+                document.getElementById('rSsid').value = e.target.value;
+            }
+        });
+
+        // 1. Establish BLE link through Bluefy Shell
+        document.getElementById('connectBtn').addEventListener('click', async () => {
+            try {
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'ESP32-Booster-Config' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+                gattServer = await device.gatt.connect();
+                service = await gattServer.getPrimaryService(SERVICE_UUID);
+                
+                loadNetworkHistory();
+                document.getElementById('configForm').style.display = 'block';
+                document.getElementById('connectBtn').innerText = "Connected! ✅";
+            } catch (err) { alert("Connection failed: " + err); }
+        });
+
+        // 2. Package data and transmit duplicate sets to the ESP32
+        document.getElementById('sendBtn').addEventListener('click', async () => {
+            try {
+                const targetSSID = document.getElementById('rSsid').value.trim();
+                const targetPASS = document.getElementById('rPass').value;
+                if(!targetSSID) { alert("Please enter a Wi-Fi network name."); return; }
+
+                // Save network to iPhone browser cache for easy selection next time
+                let history = JSON.parse(localStorage.getItem('wifi_history') || '[]');
+                if (!history.includes(targetSSID)) {
+                    history.push(targetSSID);
+                    localStorage.setItem('wifi_history', JSON.stringify(history));
+                }
+
+                // Prepare identical payloads to clone the network
+                const networkData = targetSSID + "," + targetPASS;
+                const encoder = new TextEncoder();
+
+                // Send network data to Router characteristic
+                const rChar = await service.getCharacteristic(ROUTER_CHAR);
+                await rChar.writeValue(encoder.encode(networkData));
+
+                // Send identical data to Booster characteristic to enforce cloning
+                const bChar = await service.getCharacteristic(BOOSTER_CHAR);
+                await bChar.writeValue(encoder.encode(networkData));
+
+                alert("Success! The ESP32 is cloning your network and spinning up the booster.");
+                gattServer.disconnect();
+                document.getElementById('configForm').style.display = 'none';
+                document.getElementById('connectBtn').innerText = "1. Connect to ESP32 via BLE";
+            } catch (err) { alert("Error sending data: " + err); }
+        });
+    </script>
+</body>
+</html>
